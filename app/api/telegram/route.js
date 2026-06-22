@@ -2,25 +2,24 @@ import { NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 import { Telegraf } from 'telegraf';
 
+// WAJIB untuk Next.js App Router agar tidak di-cache sebagai halaman statis
+export const dynamic = 'force-dynamic';
+
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
 const bot = new Telegraf(process.env.TELEGRAM_BOT_TOKEN);
 
-// Alur 2.0: Cek Status Pelanggan Berdasarkan ID Telegram
 bot.on('text', async (ctx) => {
   const telegramId = ctx.from.id.toString();
   const msgText = ctx.message.text;
 
   try {
-    // Jalankan query ke database pelanggan Supabase
     const { data: pelanggan, error } = await supabase
       .from('pelanggan')
       .select('*')
       .eq('telegram_id', telegramId)
       .single();
 
-    // 2.2 [SITUASI IF] Pelanggan BELUM Terdaftar di Database
     if (error || !pelanggan) {
-      // Daftarkan telegram_id baru dengan mode Live Chat aktif
       await supabase.from('pelanggan').insert([
         { telegram_id: telegramId, nama: ctx.from.first_name || 'Pelanggan Baru', is_live_chat: true }
       ]);
@@ -32,38 +31,44 @@ bot.on('text', async (ctx) => {
       );
     }
 
-    // Jika pelanggan sedang dalam mode Live Chat manual dengan Admin, bot tidak membalas otomatis
     if (pelanggan.is_live_chat) {
       return; 
     }
 
-    // 2.3 [SITUASI ELSE] Pelanggan SUDAH Terdaftar di Database
     if (msgText.toLowerCase().includes('laundry') || msgText.toLowerCase().includes('menu') || msgText === '/start') {
       return await ctx.reply(
         `Halo ${pelanggan.nama}! ✨\n` +
         `Sesi otomatisasi Bot Fast Laundry Aktif.\n\n` +
         `Silakan isi formulir digital berikut untuk membuat order penjemputan baru Anda:\n` +
-        `🔗 https://project-2qgcu.vercel.app/order-form?tg_id=${telegramId}` // Ubah localhost ke domain vercel kamu
+        `🔗 https://project-2qgcu.vercel.app/order-form?tg_id=${telegramId}`
       );
     }
   } catch (dbError) {
-    console.error("Database or Reply Error:", dbError);
+    console.error("❌ Database or Reply Error:", dbError);
   }
 });
 
 export async function POST(request) {
   try {
+    // Membaca body sebagai text/json mentah
     const body = await request.json();
     
-    // Cetak log mentah untuk memastikan data dari Telegram beneran masuk ke Vercel
-    console.log("=== DATA TELEGRAM MASUK ===", JSON.stringify(body));
+    // Log mutlak untuk memastikan apakah request dari Telegram mendarat ke sini
+    console.log("📥 [TELEGRAM INCOMING]:", JSON.stringify(body));
     
-    // WAJIB: Selesaikan penanganan update sebelum fungsi POST mengembalikan respons
+    if (!body || !body.update_id) {
+      return NextResponse.json({ error: "Invalid Telegram payload" }, { status: 400 });
+    }
+
     await bot.handleUpdate(body);
-    
     return NextResponse.json({ status: 'success' });
   } catch (err) {
-    console.error("Error Webhook Handler:", err);
+    console.error("💥 Error Webhook Handler:", err.message);
     return NextResponse.json({ status: 'error', error: err.message }, { status: 500 });
   }
+}
+
+// Menangani request GET dari browser hanya untuk mengecek apakah API ini hidup
+export async function GET() {
+  return NextResponse.json({ status: "API Telegram is running smoothly" });
 }
